@@ -4,6 +4,12 @@ import { createClient } from "@/lib/supabase/server";
 import { Badge } from "@/components/ui/badge";
 import { SessionPlayer } from "./SessionPlayer";
 import { formatDate, formatDuration } from "@/lib/utils";
+import type { TranscriptSegment } from "@/types/database";
+
+// Force dynamic rendering so Next.js never serves a stale fetch-cache response
+// for this route. Without this, the App Router's per-request fetch cache can
+// return Supabase data from a previous render even when the CDN reports a MISS.
+export const dynamic = "force-dynamic";
 
 interface PageProps {
   params: { slug: string };
@@ -39,15 +45,38 @@ export default async function SessionPage({ params, searchParams }: PageProps) {
     notFound();
   }
 
-  // Fetch transcript segments
-  const { data: segments, error: segmentsError } = await supabase
-    .from("transcript_segments")
-    .select("id, session_id, seq, start_seconds, end_seconds, text")
-    .eq("session_id", session.id)
-    .order("seq", { ascending: true });
+  // Fetch ALL transcript segments using pagination.
+  //
+  // PostgREST (the layer Supabase exposes) silently caps every query at 1000
+  // rows by default. A plain .select() with no .limit() therefore returns at
+  // most 1000 rows even when thousands of segments exist. We page through in
+  // 1 000-row batches until we get a partial page, which signals the end.
+  const PAGE_SIZE = 1000;
+  const allSegments: TranscriptSegment[] = [];
+  let from = 0;
 
-  if (segmentsError) {
-    throw new Error(segmentsError.message);
+  while (true) {
+    const { data, error } = await supabase
+      .from("transcript_segments")
+      .select("id, session_id, seq, start_seconds, end_seconds, text")
+      .eq("session_id", session.id)
+      .order("seq", { ascending: true })
+      .range(from, from + PAGE_SIZE - 1);
+
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    if (data && data.length > 0) {
+      allSegments.push(...(data as TranscriptSegment[]));
+    }
+
+    // A page shorter than PAGE_SIZE means we've reached the last page.
+    if (!data || data.length < PAGE_SIZE) {
+      break;
+    }
+
+    from += PAGE_SIZE;
   }
 
   const initialTime = searchParams.t ? parseInt(searchParams.t, 10) : 0;
@@ -78,9 +107,9 @@ export default async function SessionPage({ params, searchParams }: PageProps) {
                 {formatDuration(session.duration_seconds)}
               </span>
             )}
-            {segments && (
+            {allSegments.length > 0 && (
               <span className="text-sm text-muted-foreground">
-                {segments.length} transcript segments
+                {allSegments.length} transcript segments
               </span>
             )}
           </div>
@@ -90,7 +119,7 @@ export default async function SessionPage({ params, searchParams }: PageProps) {
       {/* Player + Transcript */}
       <SessionPlayer
         videoId={session.youtube_video_id}
-        segments={segments ?? []}
+        segments={allSegments}
         initialTime={initialTime}
       />
     </div>
