@@ -26,7 +26,6 @@ export default function SessionListPage() {
       let query = supabase
         .from("sessions")
         .select("*")
-        .eq("is_published", true)
         .order("session_date", { ascending: false });
 
       const { data, error } = await query;
