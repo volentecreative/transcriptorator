@@ -7,7 +7,6 @@ export interface Session {
   title: string;
   session_date: string;
   duration_seconds: number;
-  is_published: boolean;
   chamber_verified: boolean;
 }
 
